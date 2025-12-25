@@ -5,7 +5,6 @@ Load nodes for ComfyUI-LoadImagesMultiPath
 import os
 import torch
 import folder_paths
-from comfy.utils import common_upscale
 
 from .utils import (
     BIGMAX, MAX_PATH_COUNT, MultiPathInfo,
@@ -35,6 +34,7 @@ class LoadImagesMultiPathUpload:
                 "directory_1": (directories,),
             },
             "optional": {
+                "size_check": ("BOOLEAN", {"default": True, "tooltip": "If True, resize images to match first image in each folder. If False, all images must have same size."}),
                 "image_load_cap": ("INT", {"default": 0, "min": 0, "max": BIGMAX, "step": 1, "tooltip": "0 = no limit"}),
                 "skip_first_images": ("INT", {"default": 0, "min": 0, "max": BIGMAX, "step": 1}),
                 "select_every_nth": ("INT", {"default": 1, "min": 1, "max": BIGMAX, "step": 1}),
@@ -59,6 +59,7 @@ class LoadImagesMultiPathUpload:
     def load_images_multi(self, path_count: int, **kwargs):
         """Load images from multiple directories sequentially"""
         
+        size_check = kwargs.get('size_check', True)
         image_load_cap = kwargs.get('image_load_cap', 0)
         skip_first_images = kwargs.get('skip_first_images', 0)
         select_every_nth = kwargs.get('select_every_nth', 1)
@@ -70,9 +71,6 @@ class LoadImagesMultiPathUpload:
         # Track info for each directory
         frame_counts = []
         directory_names = []
-        
-        target_size = None
-        target_has_alpha = None
         
         # Process each directory sequentially
         for i in range(1, path_count + 1):
@@ -97,25 +95,9 @@ class LoadImagesMultiPathUpload:
                     full_path, 
                     image_load_cap, 
                     skip_first_images, 
-                    select_every_nth
+                    select_every_nth,
+                    size_check
                 )
-                
-                # Set target size from first valid directory
-                if target_size is None:
-                    target_size = size
-                    target_has_alpha = has_alpha
-                
-                # Resize images if needed to match target size
-                if size != target_size:
-                    print(f"[LoadImagesMultiPath] Resizing images from {size} to {target_size}")
-                    images = images.movedim(-1, 1)  # BHWC -> BCHW
-                    images = common_upscale(images, target_size[0], target_size[1], "lanczos", "center")
-                    images = images.movedim(1, -1)  # BCHW -> BHWC
-                
-                # Handle alpha channel mismatch
-                if has_alpha and not target_has_alpha:
-                    if images.shape[-1] == 4:
-                        images = images[:, :, :, :3]
                 
                 all_images.append(images)
                 all_masks.append(masks)
@@ -127,21 +109,35 @@ class LoadImagesMultiPathUpload:
                 dir_name = os.path.basename(full_path.rstrip('/\\'))
                 directory_names.append(dir_name)
                 
-                print(f"[LoadImagesMultiPath] Loaded {frame_count} images from directory {i}")
+                print(f"[LoadImagesMultiPath] Loaded {frame_count} images ({size[0]}x{size[1]}) from directory {i}")
                 
             except FileNotFoundError as e:
                 print(f"[LoadImagesMultiPath] Error loading directory {i}: {e}")
                 continue
+            except ValueError as e:
+                # Size mismatch - propagate this error clearly
+                print(f"[LoadImagesMultiPath] Validation error in directory {i}:")
+                print(str(e))
+                raise
             except Exception as e:
                 print(f"[LoadImagesMultiPath] Unexpected error loading directory {i}: {e}")
-                continue
+                raise
         
         if len(all_images) == 0:
             raise FileNotFoundError("No images could be loaded from any of the specified directories.")
         
-        # Concatenate all images and masks
-        combined_images = torch.cat(all_images, dim=0)
-        combined_masks = torch.cat(all_masks, dim=0)
+        # Concatenate all images and masks (sizes must match across directories)
+        try:
+            combined_images = torch.cat(all_images, dim=0)
+            combined_masks = torch.cat(all_masks, dim=0)
+        except RuntimeError as e:
+            if "Sizes of tensors must match" in str(e):
+                sizes = [(imgs.shape[2], imgs.shape[1]) for imgs in all_images]
+                raise ValueError(
+                    f"Images across directories have different sizes: {sizes}. "
+                    f"All directories must contain images of the same dimensions after processing."
+                )
+            raise
         
         # Create path info object
         path_info = MultiPathInfo(frame_counts, directory_names)
@@ -200,6 +196,7 @@ class LoadImagesMultiPathPath:
                 "directory_1": ("STRING", {"placeholder": "X://path/to/images", "default": ""}),
             },
             "optional": {
+                "size_check": ("BOOLEAN", {"default": True, "tooltip": "If True, resize images to match first image in each folder. If False, all images must have same size."}),
                 "image_load_cap": ("INT", {"default": 0, "min": 0, "max": BIGMAX, "step": 1, "tooltip": "0 = no limit"}),
                 "skip_first_images": ("INT", {"default": 0, "min": 0, "max": BIGMAX, "step": 1}),
                 "select_every_nth": ("INT", {"default": 1, "min": 1, "max": BIGMAX, "step": 1}),
@@ -224,6 +221,7 @@ class LoadImagesMultiPathPath:
     def load_images_multi(self, path_count: int, **kwargs):
         """Load images from multiple directory paths sequentially"""
         
+        size_check = kwargs.get('size_check', True)
         image_load_cap = kwargs.get('image_load_cap', 0)
         skip_first_images = kwargs.get('skip_first_images', 0)
         select_every_nth = kwargs.get('select_every_nth', 1)
@@ -235,9 +233,6 @@ class LoadImagesMultiPathPath:
         # Track info for each directory
         frame_counts = []
         directory_names = []
-        
-        target_size = None
-        target_has_alpha = None
         
         for i in range(1, path_count + 1):
             dir_key = f"directory_{i}"
@@ -260,22 +255,9 @@ class LoadImagesMultiPathPath:
                     full_path, 
                     image_load_cap, 
                     skip_first_images, 
-                    select_every_nth
+                    select_every_nth,
+                    size_check
                 )
-                
-                if target_size is None:
-                    target_size = size
-                    target_has_alpha = has_alpha
-                
-                if size != target_size:
-                    print(f"[LoadImagesMultiPath] Resizing images from {size} to {target_size}")
-                    images = images.movedim(-1, 1)
-                    images = common_upscale(images, target_size[0], target_size[1], "lanczos", "center")
-                    images = images.movedim(1, -1)
-                
-                if has_alpha and not target_has_alpha:
-                    if images.shape[-1] == 4:
-                        images = images[:, :, :, :3]
                 
                 all_images.append(images)
                 all_masks.append(masks)
@@ -287,20 +269,35 @@ class LoadImagesMultiPathPath:
                 dir_name = os.path.basename(full_path.rstrip('/\\'))
                 directory_names.append(dir_name)
                 
-                print(f"[LoadImagesMultiPath] Loaded {frame_count} images from directory {i}")
+                print(f"[LoadImagesMultiPath] Loaded {frame_count} images ({size[0]}x{size[1]}) from directory {i}")
                 
             except FileNotFoundError as e:
                 print(f"[LoadImagesMultiPath] Error loading directory {i}: {e}")
                 continue
+            except ValueError as e:
+                # Size mismatch - propagate this error clearly
+                print(f"[LoadImagesMultiPath] Validation error in directory {i}:")
+                print(str(e))
+                raise
             except Exception as e:
                 print(f"[LoadImagesMultiPath] Unexpected error loading directory {i}: {e}")
-                continue
+                raise
         
         if len(all_images) == 0:
             raise FileNotFoundError("No images could be loaded from any of the specified directories.")
         
-        combined_images = torch.cat(all_images, dim=0)
-        combined_masks = torch.cat(all_masks, dim=0)
+        # Concatenate all images and masks (sizes must match across directories)
+        try:
+            combined_images = torch.cat(all_images, dim=0)
+            combined_masks = torch.cat(all_masks, dim=0)
+        except RuntimeError as e:
+            if "Sizes of tensors must match" in str(e):
+                sizes = [(imgs.shape[2], imgs.shape[1]) for imgs in all_images]
+                raise ValueError(
+                    f"Images across directories have different sizes: {sizes}. "
+                    f"All directories must contain images of the same dimensions after processing."
+                )
+            raise
         
         # Create path info object
         path_info = MultiPathInfo(frame_counts, directory_names)

@@ -6,8 +6,8 @@ A ComfyUI custom node package for loading images from multiple directories seque
 
 - **Multiple Directory Support**: Load images from up to 50 different directories
 - **Sequential Processing**: Directories are processed in order (directory_1, directory_2, etc.)
-- **Automatic Resizing**: Images from different directories are automatically resized to match the first directory's dimensions
-- **Alpha Channel Handling**: Properly handles mixed RGBA/RGB images
+- **Optional Size Check**: When enabled, automatically resizes images within each folder to match the first image's size
+- **Alpha Channel Handling**: Properly handles RGBA images
 - **Progress Bar**: Shows loading progress across all directories
 - **Graceful Skipping**: Empty or invalid directories are skipped with warnings
 - **Dynamic UI**: Directory input fields show/hide based on `path_count` value
@@ -86,6 +86,7 @@ ComfyUI-LoadImagesMultiPath/
 |-----------|------|---------|-------------|
 | `path_count` | INT | 1 | Number of directory inputs to use (1-50) |
 | `directory_1` to `directory_50` | STRING/DROPDOWN | "" | Directory paths to load images from |
+| `size_check` | BOOLEAN | True | If True, resize images to match first image in each folder. If False, all images must have same size |
 | `image_load_cap` | INT | 0 | Maximum images to load per directory (0 = no limit) |
 | `skip_first_images` | INT | 0 | Number of images to skip at the start of each directory |
 | `select_every_nth` | INT | 1 | Load every Nth image from each directory |
@@ -190,7 +191,9 @@ If your directories were named "scene_A", "scene_B", "scene_C", you'll get:
 
 ## Notes
 
-- Images from all directories are resized to match the dimensions of the first valid directory
+- **size_check option**: When enabled (default), images within each folder are resized to match the first image's dimensions. When disabled, all images must have identical dimensions.
+- **Per-folder resizing**: Each folder uses its own first image as the target size - folders can have different sizes from each other
+- **Cross-directory consistency**: All directories must output the same final image dimensions (use resize nodes in workflow if needed)
 - Empty directories or invalid paths are skipped automatically
 - The node processes directories in numerical order (1, 2, 3, etc.)
 - Supported image formats: PNG, JPG, JPEG, BMP, WEBP, and other common formats

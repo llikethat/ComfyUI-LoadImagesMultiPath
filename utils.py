@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from PIL import Image, ImageOps
 from comfy.k_diffusion.utils import FolderOfImages
-from comfy.utils import common_upscale, ProgressBar
+from comfy.utils import ProgressBar
 
 # Constants
 BIGMAX = (2**53-1)
@@ -103,8 +103,20 @@ def validate_load_images(directory: str):
     return True
 
 
-def load_images_from_directory(directory: str, image_load_cap: int = 0, skip_first_images: int = 0, select_every_nth: int = 1):
-    """Load images from a single directory and return tensors"""
+def load_images_from_directory(directory: str, image_load_cap: int = 0, skip_first_images: int = 0, select_every_nth: int = 1, size_check: bool = True):
+    """
+    Load images from a single directory and return tensors.
+    
+    Args:
+        directory: Path to the directory
+        image_load_cap: Maximum number of images to load (0 = no limit)
+        skip_first_images: Number of images to skip from start
+        select_every_nth: Load every Nth image
+        size_check: If True, resize images that don't match first image's size.
+                   If False, load as-is (will error if sizes differ)
+    """
+    from comfy.utils import common_upscale
+    
     if not os.path.isdir(directory):
         raise FileNotFoundError(f"Directory '{directory}' cannot be found.")
     
@@ -116,50 +128,82 @@ def load_images_from_directory(directory: str, image_load_cap: int = 0, skip_fir
     if image_load_cap > 0:
         dir_files = dir_files[:image_load_cap]
     
-    # Determine common size and alpha channel presence
-    sizes = {}
-    has_alpha = False
-    for image_path in dir_files:
-        i = Image.open(image_path)
-        i = ImageOps.exif_transpose(i)
-        has_alpha |= 'A' in i.getbands()
-        count = sizes.get(i.size, 0)
-        sizes[i.size] = count + 1
-    
-    size = max(sizes.items(), key=lambda x: x[1])[0]
-    iformat = "RGBA" if has_alpha else "RGB"
-    
-    def load_image(file_path):
-        i = Image.open(file_path)
-        i = ImageOps.exif_transpose(i)
-        i = i.convert(iformat)
-        i = np.array(i, dtype=np.float32)
-        i /= 255.0
-        if i.shape[0] != size[1] or i.shape[1] != size[0]:
-            i = torch.from_numpy(i).movedim(-1, 0).unsqueeze(0)
-            i = common_upscale(i, size[0], size[1], "lanczos", "center")
-            i = i.squeeze(0).movedim(0, -1).numpy()
-        if has_alpha:
-            i[:, :, -1] = 1 - i[:, :, -1]
-        return i
-    
     total_images = len(dir_files)
     pbar = ProgressBar(total_images)
     
-    loaded_images = []
+    loaded_tensors = []
+    loaded_masks = []
+    target_size = None  # Will be set from first image
+    
     for idx, file_path in enumerate(dir_files):
-        loaded_images.append(load_image(file_path))
+        # Load and process each image
+        img = Image.open(file_path)
+        img = ImageOps.exif_transpose(img)
+        
+        has_alpha = 'A' in img.getbands()
+        iformat = "RGBA" if has_alpha else "RGB"
+        img = img.convert(iformat)
+        
+        current_size = img.size  # (width, height)
+        
+        # Set target size from first image
+        if target_size is None:
+            target_size = current_size
+        
+        # Convert to numpy then tensor
+        img_np = np.array(img, dtype=np.float32)
+        img_np /= 255.0
+        
+        if has_alpha:
+            img_np[:, :, -1] = 1 - img_np[:, :, -1]
+        
+        # Convert to tensor (H, W, C)
+        img_tensor = torch.from_numpy(img_np)
+        
+        # Handle alpha/mask
+        if has_alpha:
+            mask = img_tensor[:, :, 3]
+            img_tensor = img_tensor[:, :, :3]
+        else:
+            mask = torch.zeros((img_tensor.shape[0], img_tensor.shape[1]), dtype=torch.float32)
+        
+        # Resize if size_check is enabled and size doesn't match
+        if size_check and current_size != target_size:
+            # Resize image tensor: (H, W, C) -> (1, C, H, W) for common_upscale
+            img_tensor = img_tensor.unsqueeze(0).movedim(-1, 1)  # (1, C, H, W)
+            img_tensor = common_upscale(img_tensor, target_size[0], target_size[1], "lanczos", "center")
+            img_tensor = img_tensor.movedim(1, -1).squeeze(0)  # Back to (H, W, C)
+            
+            # Resize mask
+            mask = mask.unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
+            mask = common_upscale(mask, target_size[0], target_size[1], "lanczos", "center")
+            mask = mask.squeeze(0).squeeze(0)  # Back to (H, W)
+        
+        # Add batch dimension (1, H, W, C) for image, (1, H, W) for mask
+        img_tensor = img_tensor.unsqueeze(0)
+        mask = mask.unsqueeze(0)
+        
+        loaded_tensors.append(img_tensor)
+        loaded_masks.append(mask)
+        
         pbar.update_absolute(idx + 1, total_images)
     
-    images = torch.from_numpy(np.array(loaded_images, dtype=np.float32))
+    # Concatenate all tensors
+    try:
+        images = torch.cat(loaded_tensors, dim=0)
+        masks = torch.cat(loaded_masks, dim=0)
+    except RuntimeError as e:
+        if "Sizes of tensors must match" in str(e):
+            sizes = set()
+            for t in loaded_tensors:
+                sizes.add((t.shape[2], t.shape[1]))  # (W, H)
+            raise ValueError(
+                f"Images in directory '{directory}' have different sizes: {sizes}. "
+                f"Enable 'size_check' to automatically resize images to match the first image."
+            )
+        raise
     
-    if has_alpha:
-        masks = images[:, :, :, 3]
-        images = images[:, :, :, :3]
-    else:
-        masks = torch.zeros((images.size(0), 64, 64), dtype=torch.float32, device="cpu")
-    
-    return images, masks, images.size(0), size, has_alpha
+    return images, masks, images.size(0), target_size, False
 
 
 def get_ffmpeg_path():
