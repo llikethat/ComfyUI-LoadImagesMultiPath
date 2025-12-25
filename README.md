@@ -1,14 +1,19 @@
 # ComfyUI-LoadImagesMultiPath
 
-Load images from multiple directories and save them separately. Each folder maintains its own dimensions.
+Load images from multiple directories into a single batch, process them, and save back split by original folders.
 
 ## Features
 
 - Load from up to 50 directories
-- Each folder keeps its original image dimensions
-- Optional within-folder size normalization
+- Standard `IMAGE` output - works with any ComfyUI node
+- `path_info` tracks folder boundaries for split saving
 - Export as PNG/JPG/WebP sequences or MP4 video
-- Automatic filename suffix from folder names
+
+## Important
+
+**All images are resized to match the first image of the first folder** when `size_check=True` (default). This ensures a consistent batch size for processing.
+
+If `size_check=False`, all images must already have the same dimensions or the node will fail.
 
 ## Installation
 
@@ -16,47 +21,47 @@ Load images from multiple directories and save them separately. Each folder main
 2. Install ffmpeg for MP4 export (optional)
 3. Restart ComfyUI
 
-## Nodes
+## Workflow
 
-### Load Images Multi-Path (Upload/Path)
+```
+┌─────────────────────┐     ┌──────────────────┐     ┌─────────────────────┐
+│ Load Images         │     │ Processing       │     │ Save Images         │
+│ Multi-Path          │────▶│ (any nodes)      │────▶│ Multi-Path          │
+│                     │     │                  │     │                     │
+│ IMAGE ─────────────────────────────────────────────▶ images              │
+│ path_info ─────────────────────────────────────────▶ path_info           │
+└─────────────────────┘     └──────────────────┘     └─────────────────────┘
+```
+
+**Output:**
+- `output_folderA.mp4`
+- `output_folderB.mp4`
+- `output_folderC.mp4`
+
+## Load Node Parameters
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | path_count | 1 | Number of directories (1-50) |
 | directory_N | - | Directory path |
-| size_check | True | Resize images within folder to match first image |
+| size_check | True | Resize all images to first image size |
 | image_load_cap | 0 | Max images per folder (0=unlimited) |
 | skip_first_images | 0 | Skip N images at start |
 | select_every_nth | 1 | Load every Nth image |
 
-**Output:** `MULTI_IMAGE_BATCH`, `total_frames`
+**Outputs:** `IMAGE`, `frame_count`, `path_info`
 
-### Save Images Multi-Path
+## Save Node Parameters
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | output_format | images | `images` or `mp4` |
-| filename_prefix | output | Base filename |
+| filename_prefix | output | Base filename (folder name appended) |
 | output_directory | - | Output path (empty=ComfyUI output) |
-| frame_rate | 24 | FPS for MP4 |
 | image_format | png | `png`, `jpg`, `webp` |
-| quality | 95 | JPG/WebP quality |
+| quality | 95 | JPG/WebP quality (1-100) |
+| frame_rate | 24 | FPS for MP4 |
 | video_crf | 23 | MP4 quality (0=best, 51=worst) |
-
-## Usage
-
-```
-[Load Multi-Path] → [Save Multi-Path]
-     ↓                    ↓
-  folder_A (800x600)   output_folder_A.mp4 (800x600)
-  folder_B (1920x1080) output_folder_B.mp4 (1920x1080)
-```
-
-## Notes
-
-- Folders are processed separately - no cross-folder resizing
-- `size_check` only affects images within the same folder
-- Connect load node directly to save node (no processing in between)
 
 ## License
 

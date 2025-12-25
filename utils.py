@@ -9,26 +9,17 @@ import numpy as np
 import torch
 from PIL import Image, ImageOps
 from comfy.k_diffusion.utils import FolderOfImages
-from comfy.utils import ProgressBar
+from comfy.utils import ProgressBar, common_upscale
 
 BIGMAX = (2**53-1)
 MAX_PATH_COUNT = 50
 
 
-class MultiImageBatch:
-    """Container for multiple image batches with different dimensions."""
-    
-    def __init__(self):
-        self.batches = []
-    
-    def add(self, images, dir_name, size):
-        self.batches.append({'images': images, 'dir_name': dir_name, 'size': size})
-    
-    def __len__(self):
-        return len(self.batches)
-    
-    def __iter__(self):
-        return iter(self.batches)
+class PathInfo:
+    """Tracks frame counts per directory for splitting on save."""
+    def __init__(self, frame_counts, dir_names):
+        self.frame_counts = frame_counts
+        self.dir_names = dir_names
 
 
 def strip_path(path):
@@ -45,7 +36,6 @@ def get_image_files(directory, skip=0, every_nth=1):
         os.path.join(directory, f) for f in os.listdir(directory)
         if os.path.isfile(os.path.join(directory, f)) and os.path.splitext(f)[1].lower() in extensions
     ])
-    
     if skip > 0:
         files = files[skip:]
     if every_nth > 1:
@@ -76,10 +66,12 @@ def validate_directory(directory):
     return True
 
 
-def load_images(directory, cap=0, skip=0, every_nth=1, size_check=True):
-    """Load images from directory as tensor batch"""
-    from comfy.utils import common_upscale
-    
+def load_images(directory, cap=0, skip=0, every_nth=1, target_size=None, size_check=True):
+    """
+    Load images from directory as tensor batch.
+    If target_size provided and size_check=True, resize to that size.
+    Returns: (images_tensor, target_size used)
+    """
     if not os.path.isdir(directory):
         raise FileNotFoundError(f"Directory not found: {directory}")
     
@@ -92,7 +84,6 @@ def load_images(directory, cap=0, skip=0, every_nth=1, size_check=True):
     
     pbar = ProgressBar(len(files))
     tensors = []
-    target_w, target_h = None, None
     
     for idx, path in enumerate(files):
         img = Image.open(path)
@@ -100,21 +91,23 @@ def load_images(directory, cap=0, skip=0, every_nth=1, size_check=True):
         img = img.convert("RGB")
         
         w, h = img.size
-        if target_w is None:
-            target_w, target_h = w, h
+        
+        # Set target from first image if not provided
+        if target_size is None:
+            target_size = (w, h)
         
         tensor = torch.from_numpy(np.array(img, dtype=np.float32) / 255.0)
         
         # Resize if needed
-        if size_check and (w != target_w or h != target_h):
+        if size_check and (w, h) != target_size:
             tensor = tensor.unsqueeze(0).movedim(-1, 1)
-            tensor = common_upscale(tensor, target_w, target_h, "lanczos", "center")
+            tensor = common_upscale(tensor, target_size[0], target_size[1], "lanczos", "center")
             tensor = tensor.movedim(1, -1).squeeze(0)
         
         tensors.append(tensor.unsqueeze(0))
         pbar.update_absolute(idx + 1, len(files))
     
-    return torch.cat(tensors, dim=0), (target_w, target_h)
+    return torch.cat(tensors, dim=0), target_size
 
 
 def get_ffmpeg():

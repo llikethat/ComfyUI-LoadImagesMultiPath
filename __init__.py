@@ -1,8 +1,8 @@
 """
 ComfyUI-LoadImagesMultiPath
 
-Load images from multiple directories and save them separately.
-Each folder maintains its own image dimensions.
+Load images from multiple directories, process them, and save back split by folder.
+All images resized to first image size for consistent batch processing.
 
 Version: 2.0.0
 License: MIT

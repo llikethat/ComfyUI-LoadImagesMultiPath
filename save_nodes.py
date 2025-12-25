@@ -11,8 +11,8 @@ import folder_paths
 from .utils import get_ffmpeg, sanitize_filename
 
 
-def _save_batch(images, base_name, out_dir, fmt, img_fmt, quality, fps, crf):
-    """Save a batch of images as sequence or video"""
+def _save_images(images, base_name, out_dir, fmt, img_fmt, quality, fps, crf):
+    """Save images as sequence or video"""
     if fmt == "images":
         subdir = os.path.join(out_dir, base_name)
         os.makedirs(subdir, exist_ok=True)
@@ -36,9 +36,11 @@ def _save_batch(images, base_name, out_dir, fmt, img_fmt, quality, fps, crf):
                 img = Image.fromarray((tensor.cpu().numpy() * 255).astype(np.uint8))
                 img.save(os.path.join(tmp, f"f_{i:05d}.png"))
             
+            # scale filter ensures dimensions are divisible by 2 (required by h264)
             result = subprocess.run([
                 ffmpeg, "-y", "-framerate", str(fps),
                 "-i", os.path.join(tmp, "f_%05d.png"),
+                "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
                 "-c:v", "libx264", "-crf", str(crf),
                 "-pix_fmt", "yuv420p", "-preset", "medium", output
             ], capture_output=True, text=True)
@@ -50,13 +52,14 @@ def _save_batch(images, base_name, out_dir, fmt, img_fmt, quality, fps, crf):
 
 
 class SaveImagesMultiPath:
-    """Save images from multiple folders separately."""
+    """Save images split by original directories using path_info."""
     
     @classmethod
     def INPUT_TYPES(s):
         return {
             "required": {
-                "image_batches": ("MULTI_IMAGE_BATCH",),
+                "images": ("IMAGE",),
+                "path_info": ("PATH_INFO",),
                 "filename_prefix": ("STRING", {"default": "output"}),
             },
             "optional": {
@@ -75,19 +78,23 @@ class SaveImagesMultiPath:
     OUTPUT_NODE = True
     CATEGORY = "image/multi-path"
 
-    def save(self, image_batches, filename_prefix, output_format="images", output_directory="",
+    def save(self, images, path_info, filename_prefix, output_format="images", output_directory="",
              image_format="png", quality=95, frame_rate=24, video_crf=23):
         
         out_dir = output_directory.strip() or folder_paths.get_output_directory()
         os.makedirs(out_dir, exist_ok=True)
         
         paths = []
-        for batch in image_batches:
-            name = f"{filename_prefix}_{sanitize_filename(batch['dir_name'])}"
-            print(f"[Save] {batch['images'].shape[0]} frames → {name}")
-            paths.append(_save_batch(
-                batch['images'], name, out_dir, output_format, image_format, quality, frame_rate, video_crf
-            ))
+        idx = 0
+        
+        for count, dir_name in zip(path_info.frame_counts, path_info.dir_names):
+            batch = images[idx:idx + count]
+            idx += count
+            
+            name = f"{filename_prefix}_{sanitize_filename(dir_name)}"
+            print(f"[SaveMultiPath] {dir_name}: {count} frames → {name}")
+            
+            paths.append(_save_images(batch, name, out_dir, output_format, image_format, quality, frame_rate, video_crf))
         
         result = "\n".join(paths)
         return {"ui": {"text": [result]}, "result": (result,)}
@@ -98,7 +105,7 @@ class SaveImagesMultiPath:
 
 
 class SaveImagesSimple:
-    """Save standard IMAGE batch."""
+    """Save standard IMAGE batch as single output."""
     
     @classmethod
     def INPUT_TYPES(s):
@@ -130,9 +137,9 @@ class SaveImagesSimple:
         os.makedirs(out_dir, exist_ok=True)
         
         name = sanitize_filename(filename_prefix)
-        print(f"[Save] {images.shape[0]} frames → {name}")
+        print(f"[SaveSimple] {images.shape[0]} frames → {name}")
         
-        result = _save_batch(images, name, out_dir, output_format, image_format, quality, frame_rate, video_crf)
+        result = _save_images(images, name, out_dir, output_format, image_format, quality, frame_rate, video_crf)
         return {"ui": {"text": [result]}, "result": (result,)}
     
     @classmethod

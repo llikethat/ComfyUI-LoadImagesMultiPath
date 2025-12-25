@@ -3,33 +3,9 @@ Load nodes for ComfyUI-LoadImagesMultiPath
 """
 
 import os
+import torch
 import folder_paths
-from .utils import BIGMAX, MAX_PATH_COUNT, MultiImageBatch, strip_path, load_images, hash_directories, validate_directory
-
-
-def _load_from_directories(directories, cap, skip, every_nth, size_check):
-    """Common loading logic for both node types"""
-    batch = MultiImageBatch()
-    total = 0
-    
-    for path in directories:
-        if not path or not os.path.isdir(path):
-            continue
-        
-        try:
-            images, size = load_images(path, cap, skip, every_nth, size_check)
-            name = os.path.basename(path.rstrip('/\\'))
-            batch.add(images, name, size)
-            total += images.shape[0]
-            print(f"[LoadImagesMultiPath] {name}: {images.shape[0]} images ({size[0]}x{size[1]})")
-        except Exception as e:
-            print(f"[LoadImagesMultiPath] Error loading {path}: {e}")
-            raise
-    
-    if len(batch) == 0:
-        raise FileNotFoundError("No images loaded from any directory.")
-    
-    return batch, total
+from .utils import BIGMAX, MAX_PATH_COUNT, PathInfo, strip_path, load_images, hash_directories, validate_directory
 
 
 class LoadImagesMultiPathUpload:
@@ -57,18 +33,52 @@ class LoadImagesMultiPathUpload:
             inputs["optional"][f"directory_{i}"] = (dirs,)
         return inputs
     
-    RETURN_TYPES = ("MULTI_IMAGE_BATCH", "INT")
-    RETURN_NAMES = ("image_batches", "total_frames")
+    RETURN_TYPES = ("IMAGE", "INT", "PATH_INFO")
+    RETURN_NAMES = ("IMAGE", "frame_count", "path_info")
     FUNCTION = "load"
     CATEGORY = "image/multi-path"
 
     def load(self, path_count, **kw):
-        dirs = [folder_paths.get_annotated_filepath(strip_path(kw.get(f'directory_{i}', "")))
-                for i in range(1, path_count + 1) if kw.get(f'directory_{i}')]
-        return _load_from_directories(
-            dirs, kw.get('image_load_cap', 0), kw.get('skip_first_images', 0),
-            kw.get('select_every_nth', 1), kw.get('size_check', True)
-        )
+        size_check = kw.get('size_check', True)
+        cap = kw.get('image_load_cap', 0)
+        skip = kw.get('skip_first_images', 0)
+        every_nth = kw.get('select_every_nth', 1)
+        
+        all_images = []
+        frame_counts = []
+        dir_names = []
+        target_size = None
+        
+        for i in range(1, path_count + 1):
+            directory = kw.get(f'directory_{i}', "")
+            if not directory:
+                continue
+            
+            full_path = folder_paths.get_annotated_filepath(strip_path(directory))
+            if not os.path.isdir(full_path):
+                print(f"[LoadImagesMultiPath] Not found: {full_path}")
+                continue
+            
+            try:
+                images, target_size = load_images(full_path, cap, skip, every_nth, target_size, size_check)
+                dir_name = os.path.basename(full_path.rstrip('/\\'))
+                
+                all_images.append(images)
+                frame_counts.append(images.shape[0])
+                dir_names.append(dir_name)
+                
+                print(f"[LoadImagesMultiPath] {dir_name}: {images.shape[0]} images ({target_size[0]}x{target_size[1]})")
+            except Exception as e:
+                print(f"[LoadImagesMultiPath] Error: {e}")
+                raise
+        
+        if not all_images:
+            raise FileNotFoundError("No images loaded from any directory.")
+        
+        combined = torch.cat(all_images, dim=0)
+        path_info = PathInfo(frame_counts, dir_names)
+        
+        return (combined, combined.shape[0], path_info)
     
     @classmethod
     def IS_CHANGED(s, path_count, **kw):
@@ -107,18 +117,52 @@ class LoadImagesMultiPathPath:
             inputs["optional"][f"directory_{i}"] = ("STRING", {"default": ""})
         return inputs
     
-    RETURN_TYPES = ("MULTI_IMAGE_BATCH", "INT")
-    RETURN_NAMES = ("image_batches", "total_frames")
+    RETURN_TYPES = ("IMAGE", "INT", "PATH_INFO")
+    RETURN_NAMES = ("IMAGE", "frame_count", "path_info")
     FUNCTION = "load"
     CATEGORY = "image/multi-path"
 
     def load(self, path_count, **kw):
-        dirs = [strip_path(kw.get(f'directory_{i}', ""))
-                for i in range(1, path_count + 1) if kw.get(f'directory_{i}', "").strip()]
-        return _load_from_directories(
-            dirs, kw.get('image_load_cap', 0), kw.get('skip_first_images', 0),
-            kw.get('select_every_nth', 1), kw.get('size_check', True)
-        )
+        size_check = kw.get('size_check', True)
+        cap = kw.get('image_load_cap', 0)
+        skip = kw.get('skip_first_images', 0)
+        every_nth = kw.get('select_every_nth', 1)
+        
+        all_images = []
+        frame_counts = []
+        dir_names = []
+        target_size = None
+        
+        for i in range(1, path_count + 1):
+            directory = kw.get(f'directory_{i}', "").strip()
+            if not directory:
+                continue
+            
+            full_path = strip_path(directory)
+            if not os.path.isdir(full_path):
+                print(f"[LoadImagesMultiPath] Not found: {full_path}")
+                continue
+            
+            try:
+                images, target_size = load_images(full_path, cap, skip, every_nth, target_size, size_check)
+                dir_name = os.path.basename(full_path.rstrip('/\\'))
+                
+                all_images.append(images)
+                frame_counts.append(images.shape[0])
+                dir_names.append(dir_name)
+                
+                print(f"[LoadImagesMultiPath] {dir_name}: {images.shape[0]} images ({target_size[0]}x{target_size[1]})")
+            except Exception as e:
+                print(f"[LoadImagesMultiPath] Error: {e}")
+                raise
+        
+        if not all_images:
+            raise FileNotFoundError("No images loaded from any directory.")
+        
+        combined = torch.cat(all_images, dim=0)
+        path_info = PathInfo(frame_counts, dir_names)
+        
+        return (combined, combined.shape[0], path_info)
     
     @classmethod
     def IS_CHANGED(s, path_count, **kw):
