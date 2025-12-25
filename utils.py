@@ -117,6 +117,9 @@ def load_images_from_directory(directory: str, image_load_cap: int = 0, skip_fir
     """
     from comfy.utils import common_upscale
     
+    # Ensure size_check is boolean
+    size_check = bool(size_check)
+    
     if not os.path.isdir(directory):
         raise FileNotFoundError(f"Directory '{directory}' cannot be found.")
     
@@ -133,7 +136,11 @@ def load_images_from_directory(directory: str, image_load_cap: int = 0, skip_fir
     
     loaded_tensors = []
     loaded_masks = []
-    target_size = None  # Will be set from first image
+    target_size = None  # Will be set from first image (width, height)
+    target_height = None
+    target_width = None
+    
+    print(f"[LoadImagesMultiPath] size_check={size_check}, loading {total_images} images from {directory}")
     
     for idx, file_path in enumerate(dir_files):
         # Load and process each image
@@ -145,10 +152,13 @@ def load_images_from_directory(directory: str, image_load_cap: int = 0, skip_fir
         img = img.convert(iformat)
         
         current_size = img.size  # (width, height)
+        current_width, current_height = current_size
         
         # Set target size from first image
         if target_size is None:
             target_size = current_size
+            target_width, target_height = current_size
+            print(f"[LoadImagesMultiPath] Target size set to {target_width}x{target_height} from first image")
         
         # Convert to numpy then tensor
         img_np = np.array(img, dtype=np.float32)
@@ -168,16 +178,17 @@ def load_images_from_directory(directory: str, image_load_cap: int = 0, skip_fir
             mask = torch.zeros((img_tensor.shape[0], img_tensor.shape[1]), dtype=torch.float32)
         
         # Resize if size_check is enabled and size doesn't match
-        if size_check and current_size != target_size:
+        if size_check and (current_width != target_width or current_height != target_height):
+            print(f"[LoadImagesMultiPath] Resizing image {idx+1} from {current_width}x{current_height} to {target_width}x{target_height}")
+            
             # Resize image tensor: (H, W, C) -> (1, C, H, W) for common_upscale
             img_tensor = img_tensor.unsqueeze(0).movedim(-1, 1)  # (1, C, H, W)
-            img_tensor = common_upscale(img_tensor, target_size[0], target_size[1], "lanczos", "center")
+            img_tensor = common_upscale(img_tensor, target_width, target_height, "lanczos", "center")
             img_tensor = img_tensor.movedim(1, -1).squeeze(0)  # Back to (H, W, C)
             
             # Resize mask: (H, W) -> (1, 1, H, W) -> resize -> (H, W)
             mask = mask.unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
-            # Use nearest for mask to avoid interpolation artifacts
-            mask = torch.nn.functional.interpolate(mask, size=(target_size[1], target_size[0]), mode='nearest')
+            mask = torch.nn.functional.interpolate(mask, size=(target_height, target_width), mode='nearest')
             mask = mask.squeeze(0).squeeze(0)  # Back to (H, W)
         
         # Add batch dimension (1, H, W, C) for image, (1, H, W) for mask
@@ -200,7 +211,7 @@ def load_images_from_directory(directory: str, image_load_cap: int = 0, skip_fir
                 sizes.add((t.shape[2], t.shape[1]))  # (W, H)
             raise ValueError(
                 f"Images in directory '{directory}' have different sizes: {sizes}. "
-                f"Enable 'size_check' to automatically resize images to match the first image."
+                f"size_check was {size_check}. If True, there may be a bug - please report."
             )
         raise
     
