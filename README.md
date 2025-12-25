@@ -23,7 +23,7 @@ A ComfyUI custom node package for loading images from multiple directories and s
 
 2. Clone or copy this repository:
    ```bash
-   git clone https://github.com/yourusername/ComfyUI-LoadImagesMultiPath.git
+   git clone https://github.com/llikethat/ComfyUI-LoadImagesMultiPath.git
    ```
    
    Or simply copy the `ComfyUI-LoadImagesMultiPath` folder into `custom_nodes/`
