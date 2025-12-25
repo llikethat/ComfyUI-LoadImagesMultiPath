@@ -1,0 +1,37 @@
+# ComfyUI-LoadImagesMultiPath Requirements
+# ==========================================
+# Note: Most of these are typically already installed with ComfyUI.
+# This file is mainly for documentation purposes.
+
+# Core dependencies (usually included with ComfyUI)
+numpy>=1.21.0
+Pillow>=9.0.0
+torch>=1.12.0
+
+# ==================================================
+# SYSTEM DEPENDENCY - NOT A PYTHON PACKAGE
+# ==================================================
+# ffmpeg is required for MP4 video export.
+# It must be installed separately on your system.
+#
+# Installation instructions:
+#
+# Windows:
+#   Option 1: Download from https://ffmpeg.org/download.html
+#   Option 2: Using Chocolatey: choco install ffmpeg
+#   Option 3: Using Winget: winget install ffmpeg
+#
+# macOS:
+#   Using Homebrew: brew install ffmpeg
+#
+# Linux (Ubuntu/Debian):
+#   sudo apt update && sudo apt install ffmpeg
+#
+# Linux (Fedora):
+#   sudo dnf install ffmpeg
+#
+# Linux (Arch):
+#   sudo pacman -S ffmpeg
+#
+# After installation, verify by running: ffmpeg -version
+# ==================================================
