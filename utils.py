@@ -174,9 +174,10 @@ def load_images_from_directory(directory: str, image_load_cap: int = 0, skip_fir
             img_tensor = common_upscale(img_tensor, target_size[0], target_size[1], "lanczos", "center")
             img_tensor = img_tensor.movedim(1, -1).squeeze(0)  # Back to (H, W, C)
             
-            # Resize mask
+            # Resize mask: (H, W) -> (1, 1, H, W) -> resize -> (H, W)
             mask = mask.unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
-            mask = common_upscale(mask, target_size[0], target_size[1], "lanczos", "center")
+            # Use nearest for mask to avoid interpolation artifacts
+            mask = torch.nn.functional.interpolate(mask, size=(target_size[1], target_size[0]), mode='nearest')
             mask = mask.squeeze(0).squeeze(0)  # Back to (H, W)
         
         # Add batch dimension (1, H, W, C) for image, (1, H, W) for mask

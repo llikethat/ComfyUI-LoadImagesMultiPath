@@ -23,7 +23,7 @@ A ComfyUI custom node package for loading images from multiple directories seque
 
 2. Clone or copy this repository:
    ```bash
-   git clone https://github.com/llikethat/ComfyUI-LoadImagesMultiPath.git
+   git clone https://github.com/yourusername/ComfyUI-LoadImagesMultiPath.git
    ```
    
    Or simply copy the `ComfyUI-LoadImagesMultiPath` folder into `custom_nodes/`
@@ -175,6 +175,13 @@ If your directories were named "scene_A", "scene_B", "scene_C", you'll get:
     - processed_scene_B.mp4
     - processed_scene_C.mp4
 ```
+
+## Example Use Cases
+
+- **Animation Sequences**: Combine multiple animation folders, process them, then save back separately
+- **Batch Video Processing**: Load frames from multiple videos, apply effects, export as separate videos
+- **Dataset Processing**: Process images from different source folders and maintain organization
+- **Multi-angle Rendering**: Process renders from different camera angles in sequence
 
 ## Requirements
 
