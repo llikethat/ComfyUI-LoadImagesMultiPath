@@ -8,257 +8,133 @@ import tempfile
 import numpy as np
 from PIL import Image
 import folder_paths
+from .utils import get_ffmpeg, sanitize_filename
 
-from .utils import get_ffmpeg_path, sanitize_filename
+
+def _save_batch(images, base_name, out_dir, fmt, img_fmt, quality, fps, crf):
+    """Save a batch of images as sequence or video"""
+    if fmt == "images":
+        subdir = os.path.join(out_dir, base_name)
+        os.makedirs(subdir, exist_ok=True)
+        
+        for i, tensor in enumerate(images):
+            img = Image.fromarray((tensor.cpu().numpy() * 255).astype(np.uint8))
+            path = os.path.join(subdir, f"{base_name}_{i:05d}.{img_fmt}")
+            img.save(path, quality=quality) if img_fmt in ["jpg", "webp"] else img.save(path)
+        
+        return subdir
+    
+    else:  # mp4
+        ffmpeg = get_ffmpeg()
+        if not ffmpeg:
+            raise RuntimeError("ffmpeg not found")
+        
+        output = os.path.join(out_dir, f"{base_name}.mp4")
+        
+        with tempfile.TemporaryDirectory() as tmp:
+            for i, tensor in enumerate(images):
+                img = Image.fromarray((tensor.cpu().numpy() * 255).astype(np.uint8))
+                img.save(os.path.join(tmp, f"f_{i:05d}.png"))
+            
+            result = subprocess.run([
+                ffmpeg, "-y", "-framerate", str(fps),
+                "-i", os.path.join(tmp, "f_%05d.png"),
+                "-c:v", "libx264", "-crf", str(crf),
+                "-pix_fmt", "yuv420p", "-preset", "medium", output
+            ], capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                raise RuntimeError(f"ffmpeg error: {result.stderr}")
+        
+        return output
 
 
 class SaveImagesMultiPath:
-    """
-    Save images/videos from multiple folders, each maintaining its original dimensions.
-    Works with the MULTI_IMAGE_BATCH output from LoadImagesMultiPath nodes.
-    Automatically appends directory name as suffix to filename.
-    """
+    """Save images from multiple folders separately."""
     
     @classmethod
     def INPUT_TYPES(s):
         return {
             "required": {
                 "image_batches": ("MULTI_IMAGE_BATCH",),
-                "output_format": (["images", "mp4"],),
                 "filename_prefix": ("STRING", {"default": "output"}),
-                "output_directory": ("STRING", {"default": "", "placeholder": "Leave empty for ComfyUI output folder"}),
             },
             "optional": {
-                "frame_rate": ("INT", {"default": 24, "min": 1, "max": 120, "step": 1}),
-                "image_format": (["png", "jpg", "webp"],),
-                "jpg_quality": ("INT", {"default": 95, "min": 1, "max": 100, "step": 1}),
-                "video_quality": ("INT", {"default": 23, "min": 0, "max": 51, "step": 1, "tooltip": "CRF value: 0=lossless, 23=default, 51=worst"}),
-            },
-            "hidden": {
-                "prompt": "PROMPT",
-                "extra_pnginfo": "EXTRA_PNGINFO"
+                "output_format": (["images", "mp4"], {"default": "images"}),
+                "output_directory": ("STRING", {"default": ""}),
+                "image_format": (["png", "jpg", "webp"], {"default": "png"}),
+                "quality": ("INT", {"default": 95, "min": 1, "max": 100}),
+                "frame_rate": ("INT", {"default": 24, "min": 1, "max": 120}),
+                "video_crf": ("INT", {"default": 23, "min": 0, "max": 51}),
             },
         }
     
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("output_paths",)
-    FUNCTION = "save_images_multi"
+    FUNCTION = "save"
     OUTPUT_NODE = True
     CATEGORY = "image/multi-path"
-    DESCRIPTION = "Save images or videos from multiple folders. Each folder maintains its original dimensions. Filename gets '_directoryname' suffix."
 
-    def save_images_multi(self, image_batches, output_format, filename_prefix, 
-                          output_directory="", frame_rate=24, image_format="png", 
-                          jpg_quality=95, video_quality=23, prompt=None, extra_pnginfo=None):
-        """Save images from each folder separately"""
+    def save(self, image_batches, filename_prefix, output_format="images", output_directory="",
+             image_format="png", quality=95, frame_rate=24, video_crf=23):
         
-        # Determine output directory
-        if output_directory and output_directory.strip():
-            out_dir = output_directory.strip()
-            if not os.path.exists(out_dir):
-                os.makedirs(out_dir, exist_ok=True)
-        else:
-            out_dir = folder_paths.get_output_directory()
+        out_dir = output_directory.strip() or folder_paths.get_output_directory()
+        os.makedirs(out_dir, exist_ok=True)
         
-        output_paths = []
-        
-        # Process each batch (folder) separately
+        paths = []
         for batch in image_batches:
-            images = batch['images']
-            dir_name = batch['dir_name']
-            frame_count = batch['frame_count']
-            size = batch['size']
-            
-            # Create filename with directory suffix
-            safe_dir_name = sanitize_filename(dir_name)
-            base_filename = f"{filename_prefix}_{safe_dir_name}"
-            
-            print(f"[SaveImagesMultiPath] Saving {frame_count} frames ({size[0]}x{size[1]}) for '{dir_name}' as '{base_filename}'")
-            
-            if output_format == "images":
-                # Save as image sequence
-                output_subdir = os.path.join(out_dir, base_filename)
-                os.makedirs(output_subdir, exist_ok=True)
-                
-                for j, img_tensor in enumerate(images):
-                    # Convert tensor to PIL Image
-                    img_np = (img_tensor.cpu().numpy() * 255).astype(np.uint8)
-                    img = Image.fromarray(img_np)
-                    
-                    # Determine file extension and save
-                    frame_filename = f"{base_filename}_{j:05d}.{image_format}"
-                    frame_path = os.path.join(output_subdir, frame_filename)
-                    
-                    if image_format == "jpg":
-                        img.save(frame_path, quality=jpg_quality)
-                    elif image_format == "webp":
-                        img.save(frame_path, quality=jpg_quality)
-                    else:
-                        img.save(frame_path)
-                
-                output_paths.append(output_subdir)
-                print(f"[SaveImagesMultiPath] Saved {frame_count} images to: {output_subdir}")
-                
-            elif output_format == "mp4":
-                # Save as MP4 video
-                ffmpeg_path = get_ffmpeg_path()
-                if not ffmpeg_path:
-                    raise RuntimeError("ffmpeg not found. Please install ffmpeg to export MP4 videos.")
-                
-                output_file = os.path.join(out_dir, f"{base_filename}.mp4")
-                
-                # Create temporary directory for frames
-                with tempfile.TemporaryDirectory() as temp_dir:
-                    # Save frames as temporary PNGs
-                    for j, img_tensor in enumerate(images):
-                        img_np = (img_tensor.cpu().numpy() * 255).astype(np.uint8)
-                        img = Image.fromarray(img_np)
-                        temp_frame = os.path.join(temp_dir, f"frame_{j:05d}.png")
-                        img.save(temp_frame)
-                    
-                    # Build ffmpeg command
-                    cmd = [
-                        ffmpeg_path,
-                        "-y",  # Overwrite output
-                        "-framerate", str(frame_rate),
-                        "-i", os.path.join(temp_dir, "frame_%05d.png"),
-                        "-c:v", "libx264",
-                        "-crf", str(video_quality),
-                        "-pix_fmt", "yuv420p",
-                        "-preset", "medium",
-                        output_file
-                    ]
-                    
-                    print(f"[SaveImagesMultiPath] Running ffmpeg for {dir_name}...")
-                    
-                    result = subprocess.run(cmd, capture_output=True, text=True)
-                    
-                    if result.returncode != 0:
-                        print(f"[SaveImagesMultiPath] ffmpeg error: {result.stderr}")
-                        raise RuntimeError(f"ffmpeg failed: {result.stderr}")
-                
-                output_paths.append(output_file)
-                print(f"[SaveImagesMultiPath] Saved video to: {output_file}")
+            name = f"{filename_prefix}_{sanitize_filename(batch['dir_name'])}"
+            print(f"[Save] {batch['images'].shape[0]} frames → {name}")
+            paths.append(_save_batch(
+                batch['images'], name, out_dir, output_format, image_format, quality, frame_rate, video_crf
+            ))
         
-        # Return paths as newline-separated string
-        paths_str = "\n".join(output_paths)
-        
-        return {"ui": {"text": [paths_str]}, "result": (paths_str,)}
+        result = "\n".join(paths)
+        return {"ui": {"text": [result]}, "result": (result,)}
     
     @classmethod
-    def IS_CHANGED(s, **kwargs):
-        return float("nan")  # Always re-execute
+    def IS_CHANGED(s, **kw):
+        return float("nan")
 
 
-class SaveImagesMultiPathSimple:
-    """
-    Simplified save node that saves all images to a single output.
-    Does not require MULTI_IMAGE_BATCH - just saves all images as one sequence/video.
-    """
+class SaveImagesSimple:
+    """Save standard IMAGE batch."""
     
     @classmethod
     def INPUT_TYPES(s):
         return {
             "required": {
                 "images": ("IMAGE",),
-                "output_format": (["images", "mp4"],),
                 "filename_prefix": ("STRING", {"default": "output"}),
-                "output_directory": ("STRING", {"default": "", "placeholder": "Leave empty for ComfyUI output folder"}),
             },
             "optional": {
-                "frame_rate": ("INT", {"default": 24, "min": 1, "max": 120, "step": 1}),
-                "image_format": (["png", "jpg", "webp"],),
-                "jpg_quality": ("INT", {"default": 95, "min": 1, "max": 100, "step": 1}),
-                "video_quality": ("INT", {"default": 23, "min": 0, "max": 51, "step": 1, "tooltip": "CRF value: 0=lossless, 23=default, 51=worst"}),
+                "output_format": (["images", "mp4"], {"default": "images"}),
+                "output_directory": ("STRING", {"default": ""}),
+                "image_format": (["png", "jpg", "webp"], {"default": "png"}),
+                "quality": ("INT", {"default": 95, "min": 1, "max": 100}),
+                "frame_rate": ("INT", {"default": 24, "min": 1, "max": 120}),
+                "video_crf": ("INT", {"default": 23, "min": 0, "max": 51}),
             },
         }
     
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("output_path",)
-    FUNCTION = "save_images"
+    FUNCTION = "save"
     OUTPUT_NODE = True
     CATEGORY = "image/multi-path"
-    DESCRIPTION = "Simple save node - saves all images as one sequence or video."
 
-    def save_images(self, images, output_format, filename_prefix, 
-                    output_directory="", frame_rate=24, image_format="png", 
-                    jpg_quality=95, video_quality=23):
-        """Save all images as single output"""
+    def save(self, images, filename_prefix, output_format="images", output_directory="",
+             image_format="png", quality=95, frame_rate=24, video_crf=23):
         
-        # Determine output directory
-        if output_directory and output_directory.strip():
-            out_dir = output_directory.strip()
-            if not os.path.exists(out_dir):
-                os.makedirs(out_dir, exist_ok=True)
-        else:
-            out_dir = folder_paths.get_output_directory()
+        out_dir = output_directory.strip() or folder_paths.get_output_directory()
+        os.makedirs(out_dir, exist_ok=True)
         
-        base_filename = sanitize_filename(filename_prefix)
-        frame_count = images.shape[0]
+        name = sanitize_filename(filename_prefix)
+        print(f"[Save] {images.shape[0]} frames → {name}")
         
-        print(f"[SaveImagesMultiPath] Saving {frame_count} frames as '{base_filename}'")
-        
-        if output_format == "images":
-            # Save as image sequence
-            output_subdir = os.path.join(out_dir, base_filename)
-            os.makedirs(output_subdir, exist_ok=True)
-            
-            for j, img_tensor in enumerate(images):
-                img_np = (img_tensor.cpu().numpy() * 255).astype(np.uint8)
-                img = Image.fromarray(img_np)
-                
-                frame_filename = f"{base_filename}_{j:05d}.{image_format}"
-                frame_path = os.path.join(output_subdir, frame_filename)
-                
-                if image_format == "jpg":
-                    img.save(frame_path, quality=jpg_quality)
-                elif image_format == "webp":
-                    img.save(frame_path, quality=jpg_quality)
-                else:
-                    img.save(frame_path)
-            
-            output_path = output_subdir
-            print(f"[SaveImagesMultiPath] Saved {frame_count} images to: {output_subdir}")
-            
-        elif output_format == "mp4":
-            ffmpeg_path = get_ffmpeg_path()
-            if not ffmpeg_path:
-                raise RuntimeError("ffmpeg not found. Please install ffmpeg to export MP4 videos.")
-            
-            output_file = os.path.join(out_dir, f"{base_filename}.mp4")
-            
-            with tempfile.TemporaryDirectory() as temp_dir:
-                for j, img_tensor in enumerate(images):
-                    img_np = (img_tensor.cpu().numpy() * 255).astype(np.uint8)
-                    img = Image.fromarray(img_np)
-                    temp_frame = os.path.join(temp_dir, f"frame_{j:05d}.png")
-                    img.save(temp_frame)
-                
-                cmd = [
-                    ffmpeg_path,
-                    "-y",
-                    "-framerate", str(frame_rate),
-                    "-i", os.path.join(temp_dir, "frame_%05d.png"),
-                    "-c:v", "libx264",
-                    "-crf", str(video_quality),
-                    "-pix_fmt", "yuv420p",
-                    "-preset", "medium",
-                    output_file
-                ]
-                
-                print(f"[SaveImagesMultiPath] Running ffmpeg...")
-                
-                result = subprocess.run(cmd, capture_output=True, text=True)
-                
-                if result.returncode != 0:
-                    print(f"[SaveImagesMultiPath] ffmpeg error: {result.stderr}")
-                    raise RuntimeError(f"ffmpeg failed: {result.stderr}")
-            
-            output_path = output_file
-            print(f"[SaveImagesMultiPath] Saved video to: {output_file}")
-        
-        return {"ui": {"text": [output_path]}, "result": (output_path,)}
+        result = _save_batch(images, name, out_dir, output_format, image_format, quality, frame_rate, video_crf)
+        return {"ui": {"text": [result]}, "result": (result,)}
     
     @classmethod
-    def IS_CHANGED(s, **kwargs):
+    def IS_CHANGED(s, **kw):
         return float("nan")
