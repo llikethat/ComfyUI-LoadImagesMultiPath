@@ -14,8 +14,8 @@ from .utils import get_ffmpeg_path, sanitize_filename
 
 class SaveImagesMultiPath:
     """
-    Save images/videos split by the original directories they were loaded from.
-    Works with the path_info output from LoadImagesMultiPath nodes.
+    Save images/videos from multiple folders, each maintaining its original dimensions.
+    Works with the MULTI_IMAGE_BATCH output from LoadImagesMultiPath nodes.
     Automatically appends directory name as suffix to filename.
     """
     
@@ -23,8 +23,7 @@ class SaveImagesMultiPath:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "images": ("IMAGE",),
-                "path_info": ("MULTIPATH_INFO",),
+                "image_batches": ("MULTI_IMAGE_BATCH",),
                 "output_format": (["images", "mp4"],),
                 "filename_prefix": ("STRING", {"default": "output"}),
                 "output_directory": ("STRING", {"default": "", "placeholder": "Leave empty for ComfyUI output folder"}),
@@ -46,12 +45,12 @@ class SaveImagesMultiPath:
     FUNCTION = "save_images_multi"
     OUTPUT_NODE = True
     CATEGORY = "image/multi-path"
-    DESCRIPTION = "Save images or videos split by original directories. Filename gets '_directoryname' suffix automatically."
+    DESCRIPTION = "Save images or videos from multiple folders. Each folder maintains its original dimensions. Filename gets '_directoryname' suffix."
 
-    def save_images_multi(self, images, path_info, output_format, filename_prefix, 
+    def save_images_multi(self, image_batches, output_format, filename_prefix, 
                           output_directory="", frame_rate=24, image_format="png", 
                           jpg_quality=95, video_quality=23, prompt=None, extra_pnginfo=None):
-        """Save images split by their original directories"""
+        """Save images from each folder separately"""
         
         # Determine output directory
         if output_directory and output_directory.strip():
@@ -61,39 +60,27 @@ class SaveImagesMultiPath:
         else:
             out_dir = folder_paths.get_output_directory()
         
-        # Get frame counts and directory names from path_info
-        frame_counts = path_info.frame_counts
-        directory_names = path_info.directory_names
-        
-        # Verify total frames match
-        total_expected = sum(frame_counts)
-        total_actual = images.shape[0]
-        
-        if total_expected != total_actual:
-            print(f"[SaveImagesMultiPath] Warning: Expected {total_expected} frames but got {total_actual}")
-        
         output_paths = []
-        current_idx = 0
         
-        # Process each directory's worth of images
-        for i, (frame_count, dir_name) in enumerate(zip(frame_counts, directory_names)):
-            # Get the slice of images for this directory
-            end_idx = current_idx + frame_count
-            dir_images = images[current_idx:end_idx]
-            current_idx = end_idx
+        # Process each batch (folder) separately
+        for batch in image_batches:
+            images = batch['images']
+            dir_name = batch['dir_name']
+            frame_count = batch['frame_count']
+            size = batch['size']
             
             # Create filename with directory suffix
             safe_dir_name = sanitize_filename(dir_name)
             base_filename = f"{filename_prefix}_{safe_dir_name}"
             
-            print(f"[SaveImagesMultiPath] Saving {frame_count} frames for '{dir_name}' as '{base_filename}'")
+            print(f"[SaveImagesMultiPath] Saving {frame_count} frames ({size[0]}x{size[1]}) for '{dir_name}' as '{base_filename}'")
             
             if output_format == "images":
                 # Save as image sequence
                 output_subdir = os.path.join(out_dir, base_filename)
                 os.makedirs(output_subdir, exist_ok=True)
                 
-                for j, img_tensor in enumerate(dir_images):
+                for j, img_tensor in enumerate(images):
                     # Convert tensor to PIL Image
                     img_np = (img_tensor.cpu().numpy() * 255).astype(np.uint8)
                     img = Image.fromarray(img_np)
@@ -123,7 +110,7 @@ class SaveImagesMultiPath:
                 # Create temporary directory for frames
                 with tempfile.TemporaryDirectory() as temp_dir:
                     # Save frames as temporary PNGs
-                    for j, img_tensor in enumerate(dir_images):
+                    for j, img_tensor in enumerate(images):
                         img_np = (img_tensor.cpu().numpy() * 255).astype(np.uint8)
                         img = Image.fromarray(img_np)
                         temp_frame = os.path.join(temp_dir, f"frame_{j:05d}.png")
@@ -142,7 +129,7 @@ class SaveImagesMultiPath:
                         output_file
                     ]
                     
-                    print(f"[SaveImagesMultiPath] Running ffmpeg: {' '.join(cmd)}")
+                    print(f"[SaveImagesMultiPath] Running ffmpeg for {dir_name}...")
                     
                     result = subprocess.run(cmd, capture_output=True, text=True)
                     
@@ -166,7 +153,7 @@ class SaveImagesMultiPath:
 class SaveImagesMultiPathSimple:
     """
     Simplified save node that saves all images to a single output.
-    Does not require path_info - just saves all images as one sequence/video.
+    Does not require MULTI_IMAGE_BATCH - just saves all images as one sequence/video.
     """
     
     @classmethod
@@ -259,7 +246,7 @@ class SaveImagesMultiPathSimple:
                     output_file
                 ]
                 
-                print(f"[SaveImagesMultiPath] Running ffmpeg: {' '.join(cmd)}")
+                print(f"[SaveImagesMultiPath] Running ffmpeg...")
                 
                 result = subprocess.run(cmd, capture_output=True, text=True)
                 

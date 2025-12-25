@@ -36,6 +36,40 @@ class MultiPathInfo:
         return cls(data["frame_counts"], data["directory_names"])
 
 
+class MultiImageBatch:
+    """
+    Container class to hold multiple image batches, each with potentially different dimensions.
+    Each batch corresponds to one folder.
+    """
+    def __init__(self):
+        self.batches = []  # List of (images_tensor, masks_tensor, dir_name, size) tuples
+    
+    def add_batch(self, images, masks, dir_name, size):
+        """Add a batch of images from a directory"""
+        self.batches.append({
+            'images': images,
+            'masks': masks,
+            'dir_name': dir_name,
+            'size': size,
+            'frame_count': images.shape[0]
+        })
+    
+    def __len__(self):
+        return len(self.batches)
+    
+    def __iter__(self):
+        return iter(self.batches)
+    
+    def get_total_frames(self):
+        return sum(b['frame_count'] for b in self.batches)
+    
+    def get_directory_names(self):
+        return [b['dir_name'] for b in self.batches]
+    
+    def get_frame_counts(self):
+        return [b['frame_count'] for b in self.batches]
+
+
 def strip_path(path):
     """Strip and clean the path string"""
     if path is None:
