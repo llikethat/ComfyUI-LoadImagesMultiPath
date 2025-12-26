@@ -11,15 +11,34 @@ import folder_paths
 from .utils import get_ffmpeg, sanitize_filename
 
 
+def _get_unique_path(path, is_file=False):
+    """Get unique path by adding _01, _02, etc. if path exists"""
+    if not os.path.exists(path):
+        return path
+    
+    if is_file:
+        base, ext = os.path.splitext(path)
+    else:
+        base, ext = path, ""
+    
+    counter = 1
+    while True:
+        new_path = f"{base}_{counter:02d}{ext}"
+        if not os.path.exists(new_path):
+            return new_path
+        counter += 1
+
+
 def _save_images(images, base_name, out_dir, fmt, img_fmt, quality, fps, crf):
     """Save images as sequence or video"""
     if fmt == "images":
-        subdir = os.path.join(out_dir, base_name)
+        subdir = _get_unique_path(os.path.join(out_dir, base_name), is_file=False)
         os.makedirs(subdir, exist_ok=True)
         
+        folder_name = os.path.basename(subdir)
         for i, tensor in enumerate(images):
             img = Image.fromarray((tensor.cpu().numpy() * 255).astype(np.uint8))
-            path = os.path.join(subdir, f"{base_name}_{i:05d}.{img_fmt}")
+            path = os.path.join(subdir, f"{folder_name}_{i:05d}.{img_fmt}")
             img.save(path, quality=quality) if img_fmt in ["jpg", "webp"] else img.save(path)
         
         return subdir
@@ -29,7 +48,7 @@ def _save_images(images, base_name, out_dir, fmt, img_fmt, quality, fps, crf):
         if not ffmpeg:
             raise RuntimeError("ffmpeg not found")
         
-        output = os.path.join(out_dir, f"{base_name}.mp4")
+        output = _get_unique_path(os.path.join(out_dir, f"{base_name}.mp4"), is_file=True)
         
         with tempfile.TemporaryDirectory() as tmp:
             for i, tensor in enumerate(images):
